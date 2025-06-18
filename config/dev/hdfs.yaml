@@ -1,0 +1,29 @@
+version: "3.3.1"
+default_instance: "hdfs"
+
+# 共享配置
+common:
+  namenode: "dev-namenode"
+  webhdfs_port: 50070
+  username: "hdfs"
+  timeout: 30
+  retry_times: 3
+  retry_interval: 1
+
+# 多实例配置
+instances:
+  hdfs:
+    namenode: "dev-namenode"
+    webhdfs_port: 50070
+    username: "hdfs"
+    timeout: 30
+    retry_times: 3
+    retry_interval: 1
+
+  hdfs1:
+    namenode: "dev-namenode-1"
+    webhdfs_port: 50070
+    username: "hdfs"
+    timeout: 30
+    retry_times: 3
+    retry_interval: 1 

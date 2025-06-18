@@ -1,0 +1,25 @@
+version: "1.0"
+default_instance: "mysql"
+
+# 共享配置
+common:
+  host: "localhost"
+  port: 3306
+  username: "root"
+  password: "root"
+  database: "hdfs_monitor"
+  pool_size: 5
+  retry_times: 3
+  retry_interval: 1
+
+# 多实例配置
+instances:
+  mysql:
+    host: "localhost"
+    port: 3306
+    username: "root"
+    password: "root"
+    database: "hdfs_monitor"
+    pool_size: 5
+    retry_times: 3
+    retry_interval: 1 

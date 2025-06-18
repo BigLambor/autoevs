@@ -1,0 +1,39 @@
+# Hive配置
+version: "3.1.3"
+default_instance: "hive"
+
+# 共享配置
+common:
+  metastore_db: "hive_metastore"
+  metastore_user: "hive"
+  metastore_password: "hive123"
+  warehouse_dir: "/user/hive/warehouse"
+
+# 多实例配置
+instances:
+  hive:
+    host: "hive.example.com"
+    port: 10000
+    metastore_host: "metastore.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "nonstrict"
+      hive.exec.max.dynamic.partitions: "1000"
+
+  hive1:
+    host: "hive1.example.com"
+    port: 10000
+    metastore_host: "metastore1.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "nonstrict"
+      hive.exec.max.dynamic.partitions: "1000"
+
+  hive2:
+    host: "hive2.example.com"
+    port: 10000
+    metastore_host: "metastore2.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "nonstrict"
+      hive.exec.max.dynamic.partitions: "2000" 

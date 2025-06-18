@@ -1,0 +1,11 @@
+# 基础依赖
+pyyaml>=6.0.1
+typing-extensions>=4.5.0
+
+
+# HTTP相关
+requests>=2.31.0
+urllib3>=2.0.7
+
+# 数据库相关
+pymysql==1.1.0

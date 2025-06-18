@@ -1,0 +1,54 @@
+# HBase配置
+version: "2.4.17"
+default_instance: "hbase"
+
+# 共享配置
+common:
+  zookeeper_url: "test-zk1:2181,test-zk2:2181,test-zk3:2181"
+  zookeeper_znode_parent: "/hbase"
+  hbase_rootdir: "hdfs://hdfs-test.example.com:8020/hbase"
+  hbase_tmp_dir: "/tmp/hbase"
+  thrift_host: "test-hbase-master"
+  thrift_port: 9090
+  timeout: 30
+  autoconnect: true
+  table_prefix: "test_"
+  table_prefix_separator: "_"
+
+# 多实例配置
+instances:
+  hbase:
+    zookeeper_url: "test-zk1:2181,test-zk2:2181,test-zk3:2181"
+    master_host: "hbase-master-test.example.com"
+    master_port: 16000
+    regionserver_host: "hbase-rs-test.example.com"
+    regionserver_port: 16020
+    properties:
+      hbase.regionserver.handler.count: 20
+      hbase.regionserver.msginterval: 3000
+      hbase.regionserver.optionallogflushinterval: 1000
+      hbase.regionserver.regionSplitLimit: 1
+    thrift_host: "test-hbase-master"
+    thrift_port: 9090
+    timeout: 30
+    autoconnect: true
+    table_prefix: "test_"
+    table_prefix_separator: "_"
+
+  hbase1:
+    zookeeper_url: "test-zk1:2181,test-zk2:2181,test-zk3:2181"
+    master_host: "hbase-master-test1.example.com"
+    master_port: 16000
+    regionserver_host: "hbase-rs-test1.example.com"
+    regionserver_port: 16020
+    properties:
+      hbase.regionserver.handler.count: 30
+      hbase.regionserver.msginterval: 3000
+      hbase.regionserver.optionallogflushinterval: 1000
+      hbase.regionserver.regionSplitLimit: 1
+    thrift_host: "test-hbase-master-1"
+    thrift_port: 9090
+    timeout: 30
+    autoconnect: true
+    table_prefix: "test1_"
+    table_prefix_separator: "_" 

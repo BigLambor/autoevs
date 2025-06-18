@@ -1,0 +1,30 @@
+# Hive测试环境配置
+version: "3.1.3"
+default_instance: "hive"
+
+# 共享配置
+common:
+  metastore_db: "hive_metastore_test"
+  metastore_user: "hive_test"
+  metastore_password: "test123"
+  warehouse_dir: "/user/hive/warehouse_test"
+
+# 多实例配置
+instances:
+  hive:
+    host: "hive-test.example.com"
+    port: 10000
+    metastore_host: "metastore-test.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "nonstrict"
+      hive.exec.max.dynamic.partitions: "500"
+
+  hive1:
+    host: "hive-test1.example.com"
+    port: 10000
+    metastore_host: "metastore-test1.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "nonstrict"
+      hive.exec.max.dynamic.partitions: "500" 

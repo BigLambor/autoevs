@@ -1,0 +1,34 @@
+# Hive生产环境配置
+version: "3.1.3"
+default_instance: "hive"
+
+# 共享配置
+common:
+  metastore_db: "hive_metastore_prod"
+  metastore_user: "hive_prod"
+  metastore_password: "prod_secure_password"
+  warehouse_dir: "/user/hive/warehouse_prod"
+
+# 多实例配置
+instances:
+  hive:
+    host: "hive-prod.example.com"
+    port: 10000
+    metastore_host: "metastore-prod.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "strict"
+      hive.exec.max.dynamic.partitions: "10000"
+      hive.exec.parallel: "true"
+      hive.exec.parallel.thread.number: "16"
+
+  hive1:
+    host: "hive-prod1.example.com"
+    port: 10000
+    metastore_host: "metastore-prod1.example.com"
+    metastore_port: 9083
+    properties:
+      hive.exec.dynamic.partition.mode: "strict"
+      hive.exec.max.dynamic.partitions: "10000"
+      hive.exec.parallel: "true"
+      hive.exec.parallel.thread.number: "16" 

@@ -1,0 +1,29 @@
+version: "3.3.1"
+default_instance: "yarn"
+
+# 共享配置
+common:
+  resourcemanager: "dev-resourcemanager"
+  nodemanager: "dev-nodemanager"
+  resourcemanager_port: 8088
+  nodemanager_port: 8042
+  timeout: 30
+  verify_ssl: true
+
+# 多实例配置
+instances:
+  yarn:
+    resourcemanager: "dev-resourcemanager"
+    nodemanager: "dev-nodemanager"
+    resourcemanager_port: 8088
+    nodemanager_port: 8042
+    timeout: 30
+    verify_ssl: true
+
+  yarn1:
+    resourcemanager: "dev-resourcemanager-1"
+    nodemanager: "dev-nodemanager-1"
+    resourcemanager_port: 8088
+    nodemanager_port: 8042
+    timeout: 30
+    verify_ssl: true 

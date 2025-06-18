@@ -1,0 +1,29 @@
+version: "2.7.5"
+default_instance: "ambari"
+
+# 共享配置
+common:
+  base_url: "https://prod-ambari-server:8443/api/v1"
+  username: "admin"
+  password: "admin"
+  cluster_name: "prod-cluster"
+  timeout: 30
+  verify_ssl: true
+
+# 多实例配置
+instances:
+  ambari:
+    base_url: "https://prod-ambari-server:8443/api/v1"
+    username: "admin"
+    password: "admin"
+    cluster_name: "prod-cluster"
+    timeout: 30
+    verify_ssl: true
+
+  ambari1:
+    base_url: "https://prod-ambari-server-1:8443/api/v1"
+    username: "admin"
+    password: "admin"
+    cluster_name: "prod-cluster-1"
+    timeout: 30
+    verify_ssl: true 

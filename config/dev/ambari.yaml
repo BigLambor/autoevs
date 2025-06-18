@@ -1,0 +1,29 @@
+version: "2.7.5"
+default_instance: "ambari"
+
+# 共享配置
+common:
+  base_url: "http://dev-ambari-server:8080/api/v1"
+  username: "admin"
+  password: "admin"
+  cluster_name: "dev-cluster"
+  timeout: 30
+  verify_ssl: true
+
+# 多实例配置
+instances:
+  ambari:
+    base_url: "http://dev-ambari-server:8080/api/v1"
+    username: "admin"
+    password: "admin"
+    cluster_name: "dev-cluster"
+    timeout: 30
+    verify_ssl: true
+
+  ambari1:
+    base_url: "http://dev-ambari-server-1:8080/api/v1"
+    username: "admin"
+    password: "admin"
+    cluster_name: "dev-cluster-1"
+    timeout: 30
+    verify_ssl: true 

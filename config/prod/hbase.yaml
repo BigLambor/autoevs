@@ -1,0 +1,63 @@
+# HBase配置
+version: "2.4.17"
+default_instance: "hbase"
+
+# 共享配置
+common:
+  zookeeper_quorum: "zk-prod1.example.com,zk-prod2.example.com,zk-prod3.example.com"
+  zookeeper_port: 2181
+  zookeeper_znode_parent: "/hbase"
+  hbase_rootdir: "hdfs://hdfs-prod.example.com:8020/hbase"
+  hbase_tmp_dir: "/tmp/hbase"
+  thrift_host: "prod-hbase-master"
+  thrift_port: 9090
+  timeout: 30
+  autoconnect: true
+  table_prefix: "prod_"
+  table_prefix_separator: "_"
+
+# 多实例配置
+instances:
+  hbase:
+    master_host: "hbase-master-prod.example.com"
+    master_port: 16000
+    regionserver_host: "hbase-rs-prod.example.com"
+    regionserver_port: 16020
+    properties:
+      hbase.regionserver.handler.count: 100
+      hbase.regionserver.msginterval: 3000
+      hbase.regionserver.optionallogflushinterval: 1000
+      hbase.regionserver.regionSplitLimit: 1
+      hbase.regionserver.memstore.flush.size: 134217728
+      hbase.regionserver.global.memstore.size: 0.4
+      hbase.regionserver.global.memstore.size.lower.limit: 0.95
+      hbase.regionserver.thread.compaction.large: 8
+      hbase.regionserver.thread.compaction.small: 5
+    thrift_host: "prod-hbase-master"
+    thrift_port: 9090
+    timeout: 30
+    autoconnect: true
+    table_prefix: "prod_"
+    table_prefix_separator: "_"
+
+  hbase1:
+    master_host: "hbase-master-prod1.example.com"
+    master_port: 16000
+    regionserver_host: "hbase-rs-prod1.example.com"
+    regionserver_port: 16020
+    properties:
+      hbase.regionserver.handler.count: 100
+      hbase.regionserver.msginterval: 3000
+      hbase.regionserver.optionallogflushinterval: 1000
+      hbase.regionserver.regionSplitLimit: 1
+      hbase.regionserver.memstore.flush.size: 134217728
+      hbase.regionserver.global.memstore.size: 0.4
+      hbase.regionserver.global.memstore.size.lower.limit: 0.95
+      hbase.regionserver.thread.compaction.large: 8
+      hbase.regionserver.thread.compaction.small: 5
+    thrift_host: "prod-hbase-master-1"
+    thrift_port: 9090
+    timeout: 30
+    autoconnect: true
+    table_prefix: "prod1_"
+    table_prefix_separator: "_" 
