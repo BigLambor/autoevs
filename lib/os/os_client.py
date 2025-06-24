@@ -29,24 +29,31 @@ class OSClient:
         if not os.path.exists(self.work_dir):
             os.makedirs(self.work_dir, exist_ok=True)
 
-    def execute_command(self, command: str, shell: bool = True) -> Tuple[int, str, str]:
+    def execute_command(self, command: str, shell: bool = True, env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
         """
         执行系统命令
         
         Args:
             command: 要执行的命令
             shell: 是否使用shell执行
+            env: 环境变量字典
             
         Returns:
             (返回码, 标准输出, 标准错误)
         """
         try:
+            # 合并环境变量
+            exec_env = os.environ.copy()
+            if env:
+                exec_env.update(env)
+                
             process = subprocess.Popen(
                 command,
                 shell=shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                universal_newlines=True
+                universal_newlines=True,
+                env=exec_env
             )
             stdout, stderr = process.communicate()
             return process.returncode, stdout, stderr
@@ -54,7 +61,7 @@ class OSClient:
             logger.error(f"执行命令失败: {str(e)}")
             raise
 
-    def execute_command_with_timeout(self, command: str, timeout: int, shell: bool = True) -> Tuple[int, str, str]:
+    def execute_command_with_timeout(self, command: str, timeout: int, shell: bool = True, env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
         """
         执行系统命令（带超时）
         
@@ -62,17 +69,24 @@ class OSClient:
             command: 要执行的命令
             timeout: 超时时间（秒）
             shell: 是否使用shell执行
+            env: 环境变量字典
             
         Returns:
             (返回码, 标准输出, 标准错误)
         """
         try:
+            # 合并环境变量
+            exec_env = os.environ.copy()
+            if env:
+                exec_env.update(env)
+                
             process = subprocess.Popen(
                 command,
                 shell=shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                universal_newlines=True
+                universal_newlines=True,
+                env=exec_env
             )
             stdout, stderr = process.communicate(timeout=timeout)
             return process.returncode, stdout, stderr

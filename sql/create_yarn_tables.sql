@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS yarn_management_resources (
     memory_utilization_percent DECIMAL(5,2) NOT NULL COMMENT '内存利用率(%)',
     vcore_utilization_percent DECIMAL(5,2) NOT NULL COMMENT 'CPU利用率(%)',
     running_containers INT NOT NULL COMMENT '运行中容器数量',
+    pending_containers INT NOT NULL COMMENT '等待中容器数量',
     INDEX idx_cluster_name (cluster_name) COMMENT '集群名称索引',
     INDEX idx_collect_time (collect_time) COMMENT '采集时间索引',
     INDEX idx_insert_time (insert_time) COMMENT '插入时间索引'

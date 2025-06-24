@@ -5,12 +5,12 @@ import argparse
 import logging
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Optional, Dict, Any
 import inspect
 import signal
+import re
 from datetime import datetime
 import os
-import re
 
 from magicbox.script_template import ScriptTemplate
 from lib.os.os_client import OSClient
@@ -28,6 +28,9 @@ class HiveStorageCollector(ScriptTemplate):
         """
         super().__init__(env=env)
         
+        # 记录环境信息
+        self.logger.info(f"初始化 HiveStorageCollector，使用环境: {self.env}")
+        
         # 创建共享的OSClient
         self.os_client = OSClient({
             'timeout': 300,
@@ -44,7 +47,58 @@ class HiveStorageCollector(ScriptTemplate):
         except Exception as e:
             self.logger.warning(f"MySQL连接失败，将使用模拟模式: {str(e)}")
             self.mysql_available = False
+            
+        # 初始化Kerberos客户端（如果需要）
+        self.kerberos_client = None
+        self.enable_kerberos = False
+        try:
+            hdfs_config = self.get_component_config("hdfs")
+            self.enable_kerberos = hdfs_config.get('enable_kerberos', False)
+            
+            if self.enable_kerberos:
+                from lib.kerberos.kerberos_client import KerberosClient
+                kerberos_config = hdfs_config.get('kerberos', {})
+                if kerberos_config:
+                    self.kerberos_client = KerberosClient(kerberos_config, self.os_client)
+                    self.kerberos_client.set_logger(self.logger)
+                else:
+                    self.logger.warning("启用了Kerberos但未提供Kerberos配置")
+                    self.enable_kerberos = False
+        except Exception as e:
+            self.logger.warning(f"初始化Kerberos客户端失败: {str(e)}")
+            self.enable_kerberos = False
+            
+        # 获取 Hive 仓库目录配置
+        try:
+            hive_config = self.get_component_config("hive")
+            if hive_config:
+                self.warehouse_dir = hive_config.get('warehouse_dir', '/user/hive/warehouse')
+                # 向后兼容：如果直接读取失败，尝试从 common 节点读取
+                if self.warehouse_dir == '/user/hive/warehouse' and 'common' in hive_config:
+                    self.warehouse_dir = hive_config.get('common', {}).get('warehouse_dir', '/user/hive/warehouse')
+            else:
+                self.warehouse_dir = '/user/hive/warehouse'
+            self.logger.info(f"使用 Hive 仓库目录: {self.warehouse_dir}")
+        except Exception as e:
+            self.warehouse_dir = '/user/hive/warehouse'
+            self.logger.warning(f"获取 Hive 配置失败，使用默认仓库目录: {self.warehouse_dir}, 错误: {str(e)}")
         
+    def _ensure_authenticated(self) -> bool:
+        """
+        确保Kerberos认证有效（如果启用）
+        
+        Returns:
+            bool: 认证是否成功
+        """
+        if not self.enable_kerberos:
+            return True
+            
+        if not self.kerberos_client:
+            self.logger.error("启用了Kerberos但没有Kerberos客户端")
+            return False
+            
+        return self.kerberos_client.ensure_authenticated()
+            
     def _execute_hdfs_command(self, command: str) -> tuple:
         """
         执行 HDFS 命令
@@ -56,7 +110,16 @@ class HiveStorageCollector(ScriptTemplate):
             tuple: (return_code, output)
         """
         try:
-            return_code, stdout, stderr = self.os_client.execute_command(command)
+            # 确保Kerberos认证有效
+            if not self._ensure_authenticated():
+                raise Exception("Kerberos认证失败")
+            
+            # 设置环境变量
+            env = {}
+            if self.enable_kerberos and self.kerberos_client:
+                env.update(self.kerberos_client.get_hadoop_env())
+            
+            return_code, stdout, stderr = self.os_client.execute_command(command, env=env)
             # 合并标准输出和标准错误
             output = stdout + stderr if stderr else stdout
             return return_code, output
@@ -81,43 +144,86 @@ class HiveStorageCollector(ScriptTemplate):
             collect_time = datetime.now()
             
             # 获取所有Hive数据库
-            command = "hdfs dfs -ls /user/hive/warehouse"
+            command = f"hdfs dfs -ls {self.warehouse_dir}"
             return_code, output = self._execute_hdfs_command(command)
             
             if return_code != 0:
-                raise Exception(f"HDFS命令执行失败，返回码: {return_code}")
+                raise Exception(f"HDFS命令执行失败，返回码: {return_code}, 输出: {output}")
                 
             # 解析数据库列表
             db_list = []
-            for line in output.strip().split('\n'):
-                if line.strip():
-                    parts = line.split()
-                    if len(parts) >= 8:  # 确保行包含足够的信息
-                        db_name = parts[-1].split('/')[-1]
-                        if db_name and not db_name.startswith('.'):
-                            db_list.append(db_name)
+            lines = output.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                # 跳过空行和 JVM 参数行
+                if not line or line.startswith('-D') or line.startswith('WARNING'):
+                    continue
+                    
+                parts = line.split()
+                if len(parts) >= 8:  # 确保行包含足够的信息（HDFS ls 格式）
+                    full_path = parts[-1]
+                    db_name = full_path.split('/')[-1]
+                    
+                    # 只识别以 .db 结尾的 Hive 数据库
+                    if db_name.endswith('.db'):
+                        db_list.append(db_name)
+            
+            self.logger.info(f"找到 {len(db_list)} 个 Hive 数据库: {db_list}")
             
             # 采集每个数据库的存储信息
             db_storage_info = []
             for db_name in db_list:
-                # 获取数据库存储大小和文件数量
-                count_command = f"hdfs dfs -count /user/hive/warehouse/{db_name}"
+                count_command = f"hdfs dfs -count {self.warehouse_dir}/{db_name}"
                 return_code, count_output = self._execute_hdfs_command(count_command)
                 
                 if return_code == 0 and count_output.strip():
-                    # 输出格式: DIR_COUNT FILE_COUNT CONTENT_SIZE PATHNAME
-                    parts = count_output.strip().split()
-                    if len(parts) >= 3:
-                        info = {
-                            "cluster_name": cluster_name,
-                            "ns_name": ns_name,
-                            "db_name": db_name,
-                            "storage_size": int(parts[2]),
-                            "dir_count": int(parts[0]),
-                            "file_count": int(parts[1]),
-                            "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S')
-                        }
-                        db_storage_info.append(info)
+                    try:
+                        # 解析 hdfs dfs -count 输出，格式通常为: DIR_COUNT FILE_COUNT CONTENT_SIZE PATHNAME
+                        # 但可能包含额外的 JVM 参数或警告信息，需要找到有效的数据行
+                        lines = count_output.strip().split('\n')
+                        valid_line = None
+                        
+                        # 查找包含有效数据的行（应该以数字开头）
+                        for line in lines:
+                            line = line.strip()
+                            if line and not line.startswith('-') and not line.startswith('WARNING'):
+                                parts = line.split()
+                                if len(parts) >= 3:
+                                    # 检查前三个部分是否为数字
+                                    try:
+                                        int(parts[0])  # 目录数
+                                        int(parts[1])  # 文件数
+                                        int(parts[2])  # 存储大小
+                                        valid_line = line
+                                        break
+                                    except ValueError:
+                                        continue
+                        
+                        if valid_line:
+                            parts = valid_line.split()
+                            info = {
+                                "cluster_name": cluster_name,
+                                "ns_name": ns_name,
+                                "db_name": db_name,
+                                "storage_size": int(parts[2]),
+                                "dir_count": int(parts[0]),
+                                "file_count": int(parts[1]),
+                                "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S')
+                            }
+                            db_storage_info.append(info)
+                            self.logger.info(f"已采集数据库 {db_name}: 存储大小 {parts[2]} 字节")
+                        else:
+                            self.logger.warning(f"无法从 hdfs dfs -count 输出中解析数据库 {db_name} 的有效数据: {count_output}")
+                            continue
+                            
+                    except Exception as e:
+                        self.logger.error(f"解析数据库 {db_name} 的 hdfs dfs -count 输出失败: {str(e)}, 输出内容: {count_output}")
+                        continue
+                else:
+                    self.logger.warning(f"数据库 {db_name} 采集失败，返回码: {return_code}")
+            
+            self.logger.info(f"成功采集 {len(db_storage_info)} 个数据库的存储信息")
             
             # 记录插入时间
             insert_time = datetime.now()
@@ -157,7 +263,6 @@ class HiveStorageCollector(ScriptTemplate):
             """
             
             self.mysql_client.execute_update(sql, values)
-            self.logger.debug(f"数据已保存到表 {table_name}")
             
         except Exception as e:
             self.logger.error(f"保存数据到MySQL失败: {str(e)}")

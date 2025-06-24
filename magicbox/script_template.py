@@ -104,6 +104,65 @@ class ScriptTemplate:
         except Exception as e:
             self.logger.error(f"获取组件 {component_name} 的所有实例配置失败: {str(e)}")
             raise
+
+    def get_default_instance_name(self, component_name: str) -> Optional[str]:
+        """
+        获取组件的默认实例名称
+        
+        Args:
+            component_name: 组件名称
+            
+        Returns:
+            Optional[str]: 默认实例名称
+        """
+        try:
+            return self.config_manager.get_default_instance_name(component_name)
+        except Exception as e:
+            self.logger.error(f"获取组件 {component_name} 默认实例名称失败: {str(e)}")
+            raise
+
+    def list_instances(self, component_name: str) -> list:
+        """
+        列出组件的所有实例名称
+        
+        Args:
+            component_name: 组件名称
+            
+        Returns:
+            list: 实例名称列表
+        """
+        try:
+            return self.config_manager.list_instances(component_name)
+        except Exception as e:
+            self.logger.error(f"列出组件 {component_name} 实例失败: {str(e)}")
+            raise
+
+    def validate_config(self, component_name: str, required_keys: list, instance_name: Optional[str] = None) -> bool:
+        """
+        验证配置是否包含必需的键
+        
+        Args:
+            component_name: 组件名称
+            required_keys: 必需的配置键列表
+            instance_name: 实例名称（可选）
+            
+        Returns:
+            bool: 配置是否有效
+        """
+        try:
+            config = self.get_component_config(component_name, instance_name)
+            missing_keys = [key for key in required_keys if key not in config]
+            
+            if missing_keys:
+                self.logger.error(f"组件 {component_name} 配置缺少必需的键: {missing_keys}")
+                return False
+            
+            self.logger.debug(f"组件 {component_name} 配置验证通过")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"验证组件 {component_name} 配置失败: {str(e)}")
+            return False
     
     def run_function(self, function_name: str, **kwargs) -> Dict[str, Any]:
         """

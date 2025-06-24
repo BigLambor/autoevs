@@ -1,0 +1,24 @@
+# Kerberos认证配置示例
+# 复制此文件为 kerberos.yaml 并根据实际环境修改配置
+
+# Kerberos主体（用户名@REALM）
+principal: "autoevs@EXAMPLE.COM"
+
+# Keytab文件路径（推荐使用keytab，比密码更安全）
+keytab_path: "/etc/security/keytabs/autoevs.keytab"
+
+# 密码（仅在没有keytab时使用，生产环境不推荐）
+# password: "your_password"
+
+# Kerberos域
+realm: "EXAMPLE.COM"
+
+# KDC服务器地址（可选）
+kdc: "kdc.example.com"
+
+# 票据生存时间（小时，默认24）
+ticket_lifetime: 24
+
+# 自动续期阈值（小时，默认4）
+# 当票据剩余时间少于此值时，自动重新认证
+renew_threshold: 4 

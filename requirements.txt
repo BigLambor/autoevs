@@ -1,11 +1,8 @@
 # 基础依赖
-pyyaml>=6.0.1
-typing-extensions>=4.5.0
-
+pyyaml>=6.0.1  # 用于解析YAML配置文件
 
 # HTTP相关
-requests>=2.31.0
-urllib3>=2.0.7
+requests>=2.31.0  # 用于HTTP请求（Ambari、YARN、HTTP客户端）
 
 # 数据库相关
-pymysql==1.1.0
+pymysql==1.1.0  # 用于MySQL数据库连接

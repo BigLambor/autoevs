@@ -7,7 +7,7 @@ common:
   metastore_db: "hive_metastore_prod"
   metastore_user: "hive_prod"
   metastore_password: "prod_secure_password"
-  warehouse_dir: "/user/hive/warehouse_prod"
+  warehouse_dir: "/warehouse/tablespace/managed/hive"
 
 # 多实例配置
 instances:

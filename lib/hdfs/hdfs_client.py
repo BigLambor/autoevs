@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class HDFSClient:
-    def __init__(self, config: Dict[str, Any], os_client=None):
+    def __init__(self, config: Dict[str, Any], os_client=None, kerberos_client=None):
         """
         初始化HDFS客户端
         
@@ -17,11 +17,15 @@ class HDFSClient:
             config: HDFS配置字典，包含以下字段：
                 - namenode_url: NameNode URL，例如：hdfs://hdfs-nn:8020
                 - username: 用户名，可选
+                - enable_kerberos: 是否启用Kerberos认证，默认False
             os_client: OS客户端实例，用于执行命令
+            kerberos_client: Kerberos客户端实例，用于认证
         """
         self.namenode_url = config.get('namenode_url', '')
         self.username = config.get('username')
+        self.enable_kerberos = config.get('enable_kerberos', False)
         self.os_client = os_client
+        self.kerberos_client = kerberos_client
         
         if not self.os_client:
             from lib.os.os_client import OSClient
@@ -29,12 +33,44 @@ class HDFSClient:
                 'timeout': 300,
                 'work_dir': '/tmp'
             })
+            
+        # 如果启用Kerberos但没有提供kerberos_client，尝试创建
+        if self.enable_kerberos and not self.kerberos_client:
+            try:
+                from lib.kerberos.kerberos_client import KerberosClient
+                kerberos_config = config.get('kerberos', {})
+                if kerberos_config:
+                    self.kerberos_client = KerberosClient(kerberos_config, self.os_client)
+                else:
+                    self.logger.warning("启用了Kerberos但未提供Kerberos配置")
+                    self.enable_kerberos = False
+            except Exception as e:
+                self.logger.warning(f"创建Kerberos客户端失败: {str(e)}")
+                self.enable_kerberos = False
         
         self.logger = logger
 
     def set_logger(self, logger):
         """设置日志器"""
         self.logger = logger
+        if self.kerberos_client:
+            self.kerberos_client.set_logger(logger)
+
+    def _ensure_authenticated(self) -> bool:
+        """
+        确保Kerberos认证有效（如果启用）
+        
+        Returns:
+            bool: 认证是否成功
+        """
+        if not self.enable_kerberos:
+            return True
+            
+        if not self.kerberos_client:
+            self.logger.error("启用了Kerberos但没有Kerberos客户端")
+            return False
+            
+        return self.kerberos_client.ensure_authenticated()
 
     def _execute_hdfs_command(self, command: str) -> Tuple[int, str]:
         """
@@ -47,7 +83,16 @@ class HDFSClient:
             Tuple[int, str]: (返回码, 输出)
         """
         try:
-            return_code, stdout, stderr = self.os_client.execute_command(command)
+            # 确保Kerberos认证有效
+            if not self._ensure_authenticated():
+                raise Exception("Kerberos认证失败")
+            
+            # 设置环境变量
+            env = {}
+            if self.enable_kerberos and self.kerberos_client:
+                env.update(self.kerberos_client.get_hadoop_env())
+            
+            return_code, stdout, stderr = self.os_client.execute_command(command, env=env)
             # 合并标准输出和标准错误
             output = stdout + stderr if stderr else stdout
             return return_code, output

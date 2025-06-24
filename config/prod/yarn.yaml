@@ -8,17 +8,21 @@ common:
   resourcemanager_port: 8088
   nodemanager_port: 8042
   timeout: 30
-  verify_ssl: true
+  verify_ssl: false
+  use_https: true
+  username: "autoevs"
 
 # 多实例配置
 instances:
   yarn:
-    resourcemanager: "prod-resourcemanager"
+    resourcemanager: "10.1.4.121"
     nodemanager: "prod-nodemanager"
-    resourcemanager_port: 8088
+    resourcemanager_port: 8090
     nodemanager_port: 8042
     timeout: 30
-    verify_ssl: true
+    verify_ssl: false
+    use_https: true
+    username: "autoevs"
 
   yarn1:
     resourcemanager: "prod-resourcemanager-1"
@@ -26,4 +30,6 @@ instances:
     resourcemanager_port: 8088
     nodemanager_port: 8042
     timeout: 30
-    verify_ssl: true 
+    verify_ssl: false
+    use_https: true
+    username: "autoevs" 

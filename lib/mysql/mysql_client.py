@@ -28,8 +28,18 @@ class MySQLClient:
         self.retry_times = config.get('retry_times', 3)
         self.retry_interval = config.get('retry_interval', 1)
         self.pool_size = config.get('pool_size', 5)
+        self.logger = logger
         self._pool = []
         self._init_pool()
+
+    def set_logger(self, logger: logging.Logger) -> None:
+        """
+        设置日志记录器
+        
+        Args:
+            logger: 日志记录器实例
+        """
+        self.logger = logger
 
     def _init_pool(self):
         for _ in range(self.pool_size):
@@ -64,7 +74,7 @@ class MySQLClient:
                 )
             yield conn
         except Exception as e:
-            logger.error(f"获取数据库连接失败: {str(e)}")
+            self.logger.error(f"获取数据库连接失败: {str(e)}")
             raise
         finally:
             if conn:
@@ -74,7 +84,7 @@ class MySQLClient:
                     else:
                         conn.close()
                 except Exception as e:
-                    logger.warning(f"关闭数据库连接失败: {str(e)}")
+                    self.logger.warning(f"关闭数据库连接失败: {str(e)}")
 
     def _execute_with_retry(self, func, *args, **kwargs):
         """
@@ -94,11 +104,11 @@ class MySQLClient:
                 return func(*args, **kwargs)
             except pymysql.MySQLError as e:
                 last_error = e
-                logger.warning(f"执行失败，第{i+1}次重试: {str(e)}")
+                self.logger.warning(f"执行失败，第{i+1}次重试: {str(e)}")
                 if i < self.retry_times - 1:
                     time.sleep(self.retry_interval)
         
-        logger.error(f"执行失败，已达到最大重试次数: {str(last_error)}")
+        self.logger.error(f"执行失败，已达到最大重试次数: {str(last_error)}")
         raise last_error
 
     def execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
@@ -236,5 +246,5 @@ class MySQLClient:
                 conn.commit()
             except Exception as e:
                 conn.rollback()
-                logger.error(f"事务执行失败: {str(e)}")
+                self.logger.error(f"事务执行失败: {str(e)}")
                 raise 

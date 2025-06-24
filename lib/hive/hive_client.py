@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class HiveClient:
     """Hive 命令执行客户端"""
     
-    def __init__(self, config: Dict[str, Any], os_client: Optional[OSClient] = None):
+    def __init__(self, config: Dict[str, Any], os_client: Optional[OSClient] = None, kerberos_client=None):
         """
         初始化 Hive 客户端
         
@@ -26,7 +26,9 @@ class HiveClient:
                 - username: 用户名
                 - password: 密码
                 - properties: 其他Hive属性
+                - enable_kerberos: 是否启用Kerberos认证，默认False
             os_client: 操作系统命令执行客户端，如果为None则创建新的实例
+            kerberos_client: Kerberos客户端实例，用于认证
         """
         self.config = config
         # 优先从环境变量获取 hive_cmd，其次从配置文件获取，最后使用默认值
@@ -36,6 +38,8 @@ class HiveClient:
         self.username = self.config.get('username')
         self.password = self.config.get('password')
         self.properties = self.config.get('properties', {})
+        self.enable_kerberos = self.config.get('enable_kerberos', False)
+        self.kerberos_client = kerberos_client
         
         self.logger = logger
         
@@ -47,6 +51,20 @@ class HiveClient:
             'group': self.config.get('group')
         })
         
+        # 如果启用Kerberos但没有提供kerberos_client，尝试创建
+        if self.enable_kerberos and not self.kerberos_client:
+            try:
+                from lib.kerberos.kerberos_client import KerberosClient
+                kerberos_config = self.config.get('kerberos', {})
+                if kerberos_config:
+                    self.kerberos_client = KerberosClient(kerberos_config, self.os_client)
+                else:
+                    self.logger.warning("启用了Kerberos但未提供Kerberos配置")
+                    self.enable_kerberos = False
+            except Exception as e:
+                self.logger.warning(f"创建Kerberos客户端失败: {str(e)}")
+                self.enable_kerberos = False
+        
     def set_logger(self, logger: logging.Logger) -> None:
         """
         设置日志记录器
@@ -57,6 +75,24 @@ class HiveClient:
         self.logger = logger
         if self.os_client:
             self.os_client.logger = logger
+        if self.kerberos_client:
+            self.kerberos_client.set_logger(logger)
+        
+    def _ensure_authenticated(self) -> bool:
+        """
+        确保Kerberos认证有效（如果启用）
+        
+        Returns:
+            bool: 认证是否成功
+        """
+        if not self.enable_kerberos:
+            return True
+            
+        if not self.kerberos_client:
+            self.logger.error("启用了Kerberos但没有Kerberos客户端")
+            return False
+            
+        return self.kerberos_client.ensure_authenticated()
         
     def _build_hive_cmd(self, sql_file: str) -> str:
         """
@@ -70,15 +106,21 @@ class HiveClient:
         """
         cmd = [self.hive_cmd]
         
-        # 添加连接参数
-        if self.host:
-            cmd.extend(['--hiveconf', f'hive.server2.host={self.host}'])
-        if self.port:
-            cmd.extend(['--hiveconf', f'hive.server2.port={self.port}'])
-        if self.username:
-            cmd.extend(['--hiveconf', f'hive.server2.username={self.username}'])
-        if self.password:
-            cmd.extend(['--hiveconf', f'hive.server2.password={self.password}'])
+        # 如果启用Kerberos，添加相关配置
+        if self.enable_kerberos:
+            # 使用Kerberos认证时，通常不需要用户名密码
+            cmd.extend(['--hiveconf', 'hive.security.authorization.enabled=true'])
+            cmd.extend(['--hiveconf', 'hive.security.authenticator.manager=org.apache.hadoop.hive.ql.security.SessionStateUserAuthenticator'])
+        else:
+            # 添加连接参数
+            if self.host:
+                cmd.extend(['--hiveconf', f'hive.server2.host={self.host}'])
+            if self.port:
+                cmd.extend(['--hiveconf', f'hive.server2.port={self.port}'])
+            if self.username:
+                cmd.extend(['--hiveconf', f'hive.server2.username={self.username}'])
+            if self.password:
+                cmd.extend(['--hiveconf', f'hive.server2.password={self.password}'])
             
         # 添加其他属性
         for key, value in self.properties.items():
@@ -105,6 +147,10 @@ class HiveClient:
         """
         temp_file = None
         try:
+            # 确保Kerberos认证有效
+            if not self._ensure_authenticated():
+                raise Exception("Kerberos认证失败")
+            
             # 创建临时文件
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False) as f:
                 temp_file = f.name
@@ -113,11 +159,16 @@ class HiveClient:
             # 构建命令
             cmd = self._build_hive_cmd(temp_file)
             
+            # 设置环境变量
+            env = {}
+            if self.enable_kerberos and self.kerberos_client:
+                env.update(self.kerberos_client.get_hadoop_env())
+            
             # 使用 OSClient 执行命令
             if timeout:
-                return_code, stdout, stderr = self.os_client.execute_command_with_timeout(cmd, timeout=timeout)
+                return_code, stdout, stderr = self.os_client.execute_command_with_timeout(cmd, timeout=timeout, env=env)
             else:
-                return_code, stdout, stderr = self.os_client.execute_command(cmd)
+                return_code, stdout, stderr = self.os_client.execute_command(cmd, env=env)
             
             if return_code != 0:
                 error_msg = f"Hive 命令执行失败: {stderr}"
@@ -153,14 +204,23 @@ class HiveClient:
             Exception: 执行失败时抛出异常
         """
         try:
+            # 确保Kerberos认证有效
+            if not self._ensure_authenticated():
+                raise Exception("Kerberos认证失败")
+            
             # 构建命令
             cmd = self._build_hive_cmd(sql_file)
             
+            # 设置环境变量
+            env = {}
+            if self.enable_kerberos and self.kerberos_client:
+                env.update(self.kerberos_client.get_hadoop_env())
+            
             # 使用 OSClient 执行命令
             if timeout:
-                return_code, stdout, stderr = self.os_client.execute_command_with_timeout(cmd, timeout=timeout)
+                return_code, stdout, stderr = self.os_client.execute_command_with_timeout(cmd, timeout=timeout, env=env)
             else:
-                return_code, stdout, stderr = self.os_client.execute_command(cmd)
+                return_code, stdout, stderr = self.os_client.execute_command(cmd, env=env)
             
             if return_code != 0:
                 error_msg = f"Hive 命令执行失败: {stderr}"

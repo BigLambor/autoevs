@@ -40,6 +40,26 @@ class YARNAppSnapshotCollector(ScriptTemplate):
             self.logger.warning(f"MySQL连接失败，将使用模拟模式: {str(e)}")
             self.mysql_available = False
             
+        # 初始化Kerberos客户端（如果需要）
+        self.kerberos_client = None
+        self.enable_kerberos = False
+        try:
+            yarn_config = self.get_component_config("yarn")
+            self.enable_kerberos = yarn_config.get('enable_kerberos', False)
+            
+            if self.enable_kerberos:
+                from lib.kerberos.kerberos_client import KerberosClient
+                kerberos_config = yarn_config.get('kerberos', {})
+                if kerberos_config:
+                    self.kerberos_client = KerberosClient(kerberos_config, self.os_client)
+                    self.kerberos_client.set_logger(self.logger)
+                else:
+                    self.logger.warning("启用了Kerberos但未提供Kerberos配置")
+                    self.enable_kerberos = False
+        except Exception as e:
+            self.logger.warning(f"初始化Kerberos客户端失败: {str(e)}")
+            self.enable_kerberos = False
+            
     def _get_yarn_client(self) -> Optional[YARNClient]:
         """
         获取YARN客户端实例
@@ -49,12 +69,15 @@ class YARNAppSnapshotCollector(ScriptTemplate):
         """
         try:
             config = self.get_component_config("yarn")
-            base_url = f"http://{config['resourcemanager']}:{config.get('resourcemanager_port', 8088)}/ws/v1"
+            protocol = "https" if config.get('use_https', False) else "http"
+            base_url = f"{protocol}://{config['resourcemanager']}:{config.get('resourcemanager_port', 8088)}/ws/v1"
             yarn_config = {
                 'base_url': base_url,
                 'timeout': config.get('timeout', 30),
-                'retry_times': 3,
-                'retry_interval': 1
+                'retry_times': config.get('retry_times', 3),
+                'retry_interval': config.get('retry_interval', 1),
+                'username': config.get('username', 'hadoop'),
+                'verify_ssl': config.get('verify_ssl', False)
             }
             return YARNClient(yarn_config)
         except Exception as e:

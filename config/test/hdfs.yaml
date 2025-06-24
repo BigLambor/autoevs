@@ -4,11 +4,14 @@ default_instance: "hdfs"
 # 共享配置
 common:
   namenode_url: "hdfs://test-namenode:8020"
+  timeout: 30
 
 # 多实例配置
 instances:
   hdfs:
     namenode_url: "hdfs://test-namenode:8020"
+    timeout: 30
 
   hdfs1:
-    namenode_url: "hdfs://test-namenode-1:8020" 
+    namenode_url: "hdfs://test-namenode-1:8020"
+    timeout: 30 

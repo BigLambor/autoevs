@@ -1,8 +1,6 @@
-import requests
 from typing import Dict, Any, List, Optional
 import logging
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from lib.http.http_client import HttpClient
 
 # 设置日志
 logging.basicConfig(level=logging.INFO)
@@ -15,28 +13,42 @@ class YARNClient:
         
         Args:
             config: YARN配置字典，包含以下字段：
-                - base_url: ResourceManager基础URL，例如：http://yarn-rm:8088/ws/v1
+                - base_url: ResourceManager基础URL，例如：https://yarn-rm:8088/ws/v1
                 - timeout: 请求超时时间（秒），默认30
                 - retry_times: 重试次数，默认3
                 - retry_interval: 重试间隔（秒），默认1
+                - username: YARN REST API用户名，用于user.name参数
+                - verify_ssl: 是否验证SSL证书，默认False
         """
         self.base_url = config['base_url'].rstrip('/')  # 移除末尾的斜杠
         self.timeout = config.get('timeout', 30)
         self.retry_times = config.get('retry_times', 3)
         self.retry_interval = config.get('retry_interval', 1)
+        self.username = config.get('username', 'hadoop')  # 默认用户名
+        self.verify_ssl = config.get('verify_ssl', False)  # 默认不验证SSL证书
+        self.logger = logger
         
-        # 创建会话并配置重试
-        self.session = requests.Session()
-        retry_strategy = Retry(
-            total=self.retry_times,
-            backoff_factor=self.retry_interval,
-            status_forcelist=[500, 502, 503, 504]
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
+        # 创建HTTP客户端
+        self.http_client = HttpClient()
+        
+        # 配置SSL验证
+        self.http_client.session.verify = self.verify_ssl
+        
+        # 如果不验证SSL证书，则禁用SSL警告
+        if not self.verify_ssl:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
+    def set_logger(self, logger: logging.Logger) -> None:
+        """
+        设置日志记录器
+        
+        Args:
+            logger: 日志记录器实例
+        """
+        self.logger = logger
+
+    def _make_request(self, method: str, endpoint: str, **kwargs):
         """
         发送HTTP请求
         
@@ -49,17 +61,28 @@ class YARNClient:
             Response对象
         """
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        
+        # 添加user.name参数到params
+        params = kwargs.get('params', {})
+        if 'user.name' not in params:
+            params['user.name'] = self.username
+        
+        # 设置请求参数
+        request_kwargs = {
+            'timeout': self.timeout,
+            'params': params
+        }
+        
+        # 添加其他参数（如headers, data等）
+        for key, value in kwargs.items():
+            if key != 'params' and key != 'verify':  # params和verify已经处理过了
+                request_kwargs[key] = value
+        
         try:
-            response = self.session.request(
-                method,
-                url,
-                timeout=self.timeout,
-                **kwargs
-            )
-            response.raise_for_status()
+            response = self.http_client.request(method, url, **request_kwargs)
             return response
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Request failed: {str(e)}")
             raise
 
     def get_cluster_info(self) -> Dict[str, Any]:

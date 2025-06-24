@@ -1,1 +1,30 @@
- 
+# Ambari测试环境配置
+version: "2.7.5"
+default_instance: "ambari"
+
+# 共享配置
+common:
+  base_url: "http://test-ambari-server:8080/api/v1"
+  username: "admin"
+  password: "admin"
+  cluster_name: "test-cluster"
+  timeout: 30
+  verify_ssl: false
+
+# 多实例配置
+instances:
+  ambari:
+    base_url: "http://test-ambari-server:8080/api/v1"
+    username: "admin"
+    password: "admin"
+    cluster_name: "test-cluster"
+    timeout: 30
+    verify_ssl: false
+
+  ambari1:
+    base_url: "http://test-ambari-server-1:8080/api/v1"
+    username: "admin"
+    password: "admin"
+    cluster_name: "test-cluster-1"
+    timeout: 30
+    verify_ssl: false 

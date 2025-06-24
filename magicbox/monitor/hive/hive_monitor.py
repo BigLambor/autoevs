@@ -19,14 +19,18 @@ from lib.os.os_client import OSClient
 class HiveMonitor(ScriptTemplate):
     """Hive 监控脚本，用于监控各种 Hive 操作"""
     
-    def __init__(self, env: Optional[str] = None):
+    def __init__(self, env: Optional[str] = None, execution_engine: Optional[str] = None):
         """
         初始化 Hive 监控脚本
         
         Args:
             env: 环境名称 (dev/test/prod)，如果为None则使用默认环境
+            execution_engine: Hive执行引擎 (mr/tez/spark)，如果为None则使用默认引擎
         """
         super().__init__(env=env)
+        
+        # 设置执行引擎
+        self.execution_engine = execution_engine
         
         # 创建共享的OSClient
         self.os_client = OSClient({
@@ -34,12 +38,30 @@ class HiveMonitor(ScriptTemplate):
             'work_dir': '/tmp'
         })
         
+        # 创建Kerberos客户端（如果需要）
+        self.kerberos_client = None
+        try:
+            hive_config = self.get_component_config("hive")
+            enable_kerberos = hive_config.get('enable_kerberos', False)
+            
+            if enable_kerberos:
+                from lib.kerberos.kerberos_client import KerberosClient
+                kerberos_config = hive_config.get('kerberos', {})
+                if kerberos_config:
+                    self.kerberos_client = KerberosClient(kerberos_config, self.os_client)
+                    self.kerberos_client.set_logger(self.logger)
+        except Exception as e:
+            self.logger.warning(f"初始化Kerberos客户端失败: {str(e)}")
+        
         # 创建Hive客户端
         self.hive_client = HiveClient(
             self.get_component_config("hive"),
-            os_client=self.os_client
+            os_client=self.os_client,
+            kerberos_client=self.kerberos_client
         )
         self.hive_client.set_logger(self.logger)
+        
+
         
     def _execute_hive_command(self, sql: str) -> tuple:
         """
@@ -52,9 +74,54 @@ class HiveMonitor(ScriptTemplate):
             tuple: (return_code, output)
         """
         try:
-            return self.hive_client.execute_sql(sql)
+            # 如果指定了执行引擎，将设置命令和实际SQL合并执行
+            if self.execution_engine:
+                engine_sql = f"SET hive.execution.engine={self.execution_engine};"
+                combined_sql = f"{engine_sql}\n{sql}"
+                self.logger.info(f"设置Hive执行引擎为 {self.execution_engine}")
+                return self.hive_client.execute_sql(combined_sql)
+            else:
+                return self.hive_client.execute_sql(sql)
         except Exception as e:
             self.logger.error(f"执行 Hive 命令时发生错误: {str(e)}")
+            raise
+    
+    def check_execution_engine(self, **kwargs) -> Dict[str, Any]:
+        """
+        检查当前Hive执行引擎设置
+        
+        Returns:
+            Dict[str, Any]: 执行结果
+        """
+        self.logger.info("开始检查Hive执行引擎")
+        try:
+            # 查询当前执行引擎
+            engine_sql = "SET hive.execution.engine"
+            
+            # 如果配置了执行引擎，直接使用HiveClient执行，避免重复设置
+            if self.execution_engine:
+                combined_sql = f"SET hive.execution.engine={self.execution_engine};\n{engine_sql}"
+                self.logger.info(f"检查执行引擎设置 (配置为: {self.execution_engine})")
+                _, output = self.hive_client.execute_sql(combined_sql)
+            else:
+                _, output = self.hive_client.execute_sql(engine_sql)
+            
+            # 解析输出获取当前引擎
+            current_engine = "unknown"
+            for line in output.strip().split('\n'):
+                if 'hive.execution.engine' in line and '=' in line:
+                    current_engine = line.split('=')[-1].strip()
+                    break
+            
+            result = {
+                "current_engine": current_engine,
+                "configured_engine": self.execution_engine or "default"
+            }
+            
+            self.logger.info(f"Hive执行引擎信息: {result}")
+            return {"status": "success", "engine_info": result}
+        except Exception as e:
+            self.logger.error(f"检查Hive执行引擎失败: {str(e)}")
             raise
             
     def create_test_table(self, **kwargs) -> Dict[str, Any]:
@@ -248,7 +315,7 @@ class HiveMonitor(ScriptTemplate):
                 """,
                 "status_check": """
                 SELECT COUNT(*) 
-                FROM test_monitor 
+                FROM test_monitor
                 WHERE status NOT IN ('active', 'inactive')
                 """
             }
@@ -324,11 +391,17 @@ class HiveMonitor(ScriptTemplate):
             
             # 运行各个检查
             checks = [
+                "check_execution_engine",
+                "create_test_table",
+                "add_test_partition",
+                "load_test_data",
+                "count_test_data",
                 "check_table_storage",
-                "check_partition_health",
-                "check_data_quality",
-                "check_query_performance",
-                "check_table_metadata"
+                #"check_partition_health",
+                #"check_data_quality",
+                #"check_query_performance",
+                "check_table_metadata",
+                "drop_test_table"
             ]
             
             for check in checks:
@@ -352,6 +425,8 @@ def parse_args():
                       help='要执行的函数名 (例如: --run=check_table_storage)')
     parser.add_argument('--env', type=str, choices=['dev', 'test', 'prod'],
                       help='环境名称 (dev/test/prod)')
+    parser.add_argument('--engine', type=str, choices=['mr', 'tez', 'spark'],
+                      help='Hive执行引擎 (mr/tez/spark)')
     parser.add_argument('--debug', action='store_true',
                       help='启用调试模式')
     
@@ -370,7 +445,7 @@ def main():
     args = parse_args()
     
     # 创建脚本实例
-    script = HiveMonitor(env=args.env)
+    script = HiveMonitor(env=args.env, execution_engine=args.engine)
     
     # 如果启用调试模式，设置日志级别为DEBUG
     if args.debug:

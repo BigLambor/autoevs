@@ -47,6 +47,42 @@ class YARNResourceCollector(ScriptTemplate):
             self.logger.warning(f"MySQL连接失败，将使用模拟模式: {str(e)}")
             self.mysql_available = False
             
+        # 初始化Kerberos客户端（如果需要）
+        self.kerberos_client = None
+        self.enable_kerberos = False
+        try:
+            yarn_config = self.get_component_config("yarn")
+            self.enable_kerberos = yarn_config.get('enable_kerberos', False)
+            
+            if self.enable_kerberos:
+                from lib.kerberos.kerberos_client import KerberosClient
+                kerberos_config = yarn_config.get('kerberos', {})
+                if kerberos_config:
+                    self.kerberos_client = KerberosClient(kerberos_config, self.os_client)
+                    self.kerberos_client.set_logger(self.logger)
+                else:
+                    self.logger.warning("启用了Kerberos但未提供Kerberos配置")
+                    self.enable_kerberos = False
+        except Exception as e:
+            self.logger.warning(f"初始化Kerberos客户端失败: {str(e)}")
+            self.enable_kerberos = False
+            
+    def _ensure_authenticated(self) -> bool:
+        """
+        确保Kerberos认证有效（如果启用）
+        
+        Returns:
+            bool: 认证是否成功
+        """
+        if not self.enable_kerberos:
+            return True
+            
+        if not self.kerberos_client:
+            self.logger.error("启用了Kerberos但没有Kerberos客户端")
+            return False
+            
+        return self.kerberos_client.ensure_authenticated()
+            
     def _execute_yarn_command(self, command: str) -> tuple:
         """
         执行 YARN 命令
@@ -58,7 +94,16 @@ class YARNResourceCollector(ScriptTemplate):
             tuple: (return_code, output)
         """
         try:
-            return_code, stdout, stderr = self.os_client.execute_command(command)
+            # 确保Kerberos认证有效
+            if not self._ensure_authenticated():
+                raise Exception("Kerberos认证失败")
+            
+            # 设置环境变量
+            env = {}
+            if self.enable_kerberos and self.kerberos_client:
+                env.update(self.kerberos_client.get_hadoop_env())
+            
+            return_code, stdout, stderr = self.os_client.execute_command(command, env=env)
             # 合并标准输出和标准错误
             output = stdout + stderr if stderr else stdout
             return return_code, output
@@ -69,12 +114,15 @@ class YARNResourceCollector(ScriptTemplate):
     def _get_yarn_client(self) -> Optional[YARNClient]:
         try:
             config = self.get_component_config("yarn")
-            base_url = f"http://{config['resourcemanager']}:{config.get('resourcemanager_port', 8088)}/ws/v1"
+            protocol = "https" if config.get('use_https', False) else "http"
+            base_url = f"{protocol}://{config['resourcemanager']}:{config.get('resourcemanager_port', 8088)}/ws/v1"
             yarn_config = {
                 'base_url': base_url,
                 'timeout': config.get('timeout', 30),
-                'retry_times': 3,
-                'retry_interval': 1
+                'retry_times': config.get('retry_times', 3),
+                'retry_interval': config.get('retry_interval', 1),
+                'username': config.get('username', 'hadoop'),
+                'verify_ssl': config.get('verify_ssl', False)
             }
             return YARNClient(yarn_config)
         except Exception as e:

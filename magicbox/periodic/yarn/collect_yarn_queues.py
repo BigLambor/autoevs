@@ -10,11 +10,9 @@ import inspect
 import signal
 from datetime import datetime
 import os
-import re
 import json
 
 from magicbox.script_template import ScriptTemplate
-from lib.os.os_client import OSClient
 from lib.mysql.mysql_client import MySQLClient
 from lib.yarn.yarn_client import YARNClient
 
@@ -29,12 +27,6 @@ class YARNQueueCollector(ScriptTemplate):
             env: 环境名称 (dev/test/prod)，如果为None则使用默认环境
         """
         super().__init__(env=env)
-        
-        # 创建共享的OSClient
-        self.os_client = OSClient({
-            'timeout': 300,
-            'work_dir': '/tmp'
-        })
         
         # 创建MySQL客户端（如果配置可用）
         try:
@@ -56,12 +48,15 @@ class YARNQueueCollector(ScriptTemplate):
         """
         try:
             config = self.get_component_config("yarn")
-            base_url = f"http://{config['resourcemanager']}:{config.get('resourcemanager_port', 8088)}/ws/v1"
+            protocol = "https" if config.get('use_https', False) else "http"
+            base_url = f"{protocol}://{config['resourcemanager']}:{config.get('resourcemanager_port', 8088)}/ws/v1"
             yarn_config = {
                 'base_url': base_url,
                 'timeout': config.get('timeout', 30),
-                'retry_times': 3,
-                'retry_interval': 1
+                'retry_times': config.get('retry_times', 3),
+                'retry_interval': config.get('retry_interval', 1),
+                'username': config.get('username', 'hadoop'),
+                'verify_ssl': config.get('verify_ssl', False)
             }
             return YARNClient(yarn_config)
         except Exception as e:
@@ -78,270 +73,230 @@ class YARNQueueCollector(ScriptTemplate):
         Returns:
             Dict[str, Any]: 队列资源配置信息
         """
-        self.logger.info("开始采集YARN队列资源配置情况（REST API优先）")
+        self.logger.info("开始采集YARN队列资源配置情况（仅使用REST API）")
         collect_time = datetime.now()
+        
+        # 获取YARN客户端
         yarn_client = self._get_yarn_client()
+        if not yarn_client:
+            error_msg = "无法获取YARN客户端实例"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+            
         queue_details = []
-        
-        if yarn_client:
-            try:
-                # 通过REST API获取所有队列信息
-                scheduler = yarn_client._make_request('GET', 'cluster/scheduler').json()
-                queues = scheduler.get('scheduler', {}).get('schedulerInfo', {}).get('queues', {}).get('queue', [])
+        try:
+            # 通过REST API获取调度器信息
+            self.logger.info("正在获取YARN调度器信息...")
+            scheduler_response = yarn_client._make_request('GET', 'cluster/scheduler')
+            scheduler_data = scheduler_response.json()
+            
+            # 提取队列信息
+            scheduler_info = scheduler_data.get('scheduler', {}).get('schedulerInfo', {})
+            scheduler_type = scheduler_info.get('type', 'unknown')
+            self.logger.info(f"检测到调度器类型: {scheduler_type}")
+            
+            # 根据调度器类型解析队列数据
+            all_queues = []
+            if scheduler_type == 'fairScheduler':
+                # Fair Scheduler格式
+                all_queues = self._parse_fair_scheduler(scheduler_info)
+            elif scheduler_type in ['capacityScheduler', 'capacitySchedulerV2']:
+                # Capacity Scheduler格式
+                all_queues = self._parse_capacity_scheduler(scheduler_info)
+            else:
+                self.logger.warning(f"未知的调度器类型: {scheduler_type}，尝试通用解析")
+                all_queues = self._parse_capacity_scheduler(scheduler_info)
                 
-                def flatten_queues(qs):
-                    """递归展开队列层级"""
-                    result = []
-                    for q in qs:
-                        result.append(q)
-                        if 'queues' in q and 'queue' in q['queues']:
-                            result.extend(flatten_queues(q['queues']['queue']))
-                    return result
-                    
-                all_queues = flatten_queues(queues)
-                for q in all_queues:
-                    queue_detail = {
-                        "queue_name": q.get("queueName", ""),
-                        "state": q.get("state", ""),
-                        "capacity_percent": q.get("capacity", 0),
-                        "maximum_capacity_percent": q.get("maximumCapacity", 0),
-                        "current_capacity_percent": q.get("currentCapacity", 0),
-                        "num_containers": q.get("numContainers", 0),
-                        "used_memory_mb": q.get("usedResources", {}).get("memory", 0),
-                        "used_vcores": q.get("usedResources", {}).get("vCores", 0),
-                        "reserved_memory_mb": q.get("reservedResources", {}).get("memory", 0),
-                        "reserved_vcores": q.get("reservedResources", {}).get("vCores", 0),
-                        "max_memory_mb": q.get("maxResources", {}).get("memory", 0),
-                        "max_vcores": q.get("maxResources", {}).get("vCores", 0),
-                        "min_memory_mb": q.get("minResources", {}).get("memory", 0),
-                        "min_vcores": q.get("minResources", {}).get("vCores", 0),
-                        "pending_containers": q.get("pendingContainers", 0),
-                        "running_containers": q.get("runningContainers", 0),
-                        "cluster_name": cluster_name,
-                        "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        "insert_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }
-                    
-                    # 保存到MySQL
-                    if self.mysql_available:
-                        try:
-                            self._save_to_mysql("yarn_queue_resources", queue_detail)
-                        except Exception as e:
-                            self.logger.error(f"保存队列 {queue_detail['queue_name']} 数据到MySQL失败: {str(e)}")
+            self.logger.info(f"解析后队列总数: {len(all_queues)}")
+            
+            # 处理每个队列
+            for i, queue in enumerate(all_queues):
+                try:
+                    queue_detail = self._extract_queue_detail(queue, cluster_name, collect_time)
+                    if queue_detail:
+                        # 保存到MySQL
+                        if self.mysql_available:
+                            try:
+                                self._save_to_mysql("yarn_queue_resources", queue_detail)
+                                self.logger.debug(f"队列 {queue_detail['queue_name']} 数据已保存到MySQL")
+                            except Exception as e:
+                                self.logger.error(f"保存队列 {queue_detail['queue_name']} 数据到MySQL失败: {str(e)}")
+                        else:
+                            self.logger.info(f"MySQL不可用，跳过保存队列 {queue_detail['queue_name']} 数据")
                             
-                    queue_details.append(queue_detail)
-                    
-            except Exception as e:
-                self.logger.warning(f"YARN REST API队列采集失败，降级为CLI: {str(e)}")
-                
-        # 如果REST API失败，尝试使用CLI
-        if not queue_details:
-            try:
-                all_queues = self._get_all_queues()
-                for queue_name in all_queues:
-                    try:
-                        command = f"yarn queue -status {queue_name}"
-                        return_code, queue_output = self._execute_yarn_command(command)
-                        if return_code == 0:
-                            queue_detail = self._parse_queue_status(queue_output)
-                            queue_detail.update({
-                                "queue_name": queue_name,
-                                "cluster_name": cluster_name,
-                                "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S'),
-                                "insert_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            })
-                            
-                            # 保存到MySQL
-                            if self.mysql_available:
-                                try:
-                                    self._save_to_mysql("yarn_queue_resources", queue_detail)
-                                except Exception as e:
-                                    self.logger.error(f"保存队列 {queue_name} 数据到MySQL失败: {str(e)}")
-                                    
-                            queue_details.append(queue_detail)
-                    except Exception as e:
-                        self.logger.warning(f"获取队列 {queue_name} 信息失败: {str(e)}")
-                        continue
+                        queue_details.append(queue_detail)
                         
-            except Exception as e:
-                self.logger.error(f"CLI方式采集队列信息失败: {str(e)}")
-                
-        result = {
-            "cluster_name": cluster_name,
-            "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S'),
-            "total_queues": len(queue_details),
-            "queue_details": queue_details
-        }
-        
-        self.logger.info("YARN队列资源配置信息采集完成")
-        return {"status": "success", "queue_resources": result}
-        
-    def _execute_yarn_command(self, command: str) -> tuple:
-        """
-        执行 YARN 命令
-        
-        Args:
-            command: 要执行的 YARN 命令
-            
-        Returns:
-            tuple: (return_code, output)
-        """
-        try:
-            return_code, stdout, stderr = self.os_client.execute_command(command)
-            # 合并标准输出和标准错误
-            output = stdout + stderr if stderr else stdout
-            return return_code, output
-        except Exception as e:
-            self.logger.error(f"执行 YARN 命令时发生错误: {str(e)}")
-            raise
-            
-    def _get_all_queues(self) -> List[str]:
-        """
-        获取所有队列名称
-        
-        Returns:
-            List[str]: 队列名称列表
-        """
-        try:
-            # 尝试获取队列列表
-            command = "yarn queue -list"
-            return_code, output = self._execute_yarn_command(command)
-            
-            if return_code != 0:
-                # 如果获取队列列表失败，返回默认队列
-                return ["default"]
-                
-            queues = []
-            lines = output.strip().split('\n')
-            
-            for line in lines:
-                if 'Queue Name :' in line:
-                    match = re.search(r'Queue Name :\s*(.+)', line)
-                    if match:
-                        queue_name = match.group(1).strip()
-                        if queue_name and queue_name not in queues:
-                            queues.append(queue_name)
+                        # 每处理10个队列输出一次进度
+                        if (i + 1) % 10 == 0:
+                            self.logger.info(f"已处理 {i + 1}/{len(all_queues)} 个队列")
                             
-            return queues if queues else ["default"]
+                except Exception as e:
+                    queue_name = queue.get("queueName", f"Unknown-{i}")
+                    self.logger.error(f"处理队列 {queue_name} 时发生错误: {str(e)}")
+                    continue
+                    
+            self.logger.info(f"YARN队列资源配置信息采集完成，共采集 {len(queue_details)} 个队列")
             
-        except Exception as e:
-            self.logger.warning(f"获取队列列表失败: {str(e)}")
-            return ["default"]
-            
-    def _parse_queue_status(self, output: str) -> Dict[str, Any]:
-        """
-        解析队列状态输出
-        
-        Args:
-            output: yarn queue -status命令的输出
-            
-        Returns:
-            Dict[str, Any]: 解析后的队列信息
-        """
-        try:
-            lines = output.strip().split('\n')
-            
-            queue_info = {
-                "state": "",
-                "capacity_percent": 0,
-                "maximum_capacity_percent": 0,
-                "current_capacity_percent": 0,
-                "num_containers": 0,
-                "used_memory_mb": 0,
-                "used_vcores": 0,
-                "reserved_memory_mb": 0,
-                "reserved_vcores": 0,
-                "max_memory_mb": 0,
-                "max_vcores": 0,
-                "min_memory_mb": 0,
-                "min_vcores": 0,
-                "pending_containers": 0,
-                "running_containers": 0
+            result = {
+                "cluster_name": cluster_name,
+                "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "total_queues": len(queue_details),
+                "queue_details": queue_details
             }
             
-            for line in lines:
-                if 'State :' in line:
-                    match = re.search(r'State :\s*(.+)', line)
-                    if match:
-                        queue_info["state"] = match.group(1).strip()
-                elif 'Capacity :' in line:
-                    match = re.search(r'Capacity :\s*([\d.]+)%', line)
-                    if match:
-                        queue_info["capacity_percent"] = float(match.group(1))
-                elif 'Maximum Capacity :' in line:
-                    match = re.search(r'Maximum Capacity :\s*([\d.]+)%', line)
-                    if match:
-                        queue_info["maximum_capacity_percent"] = float(match.group(1))
-                elif 'Current Capacity :' in line:
-                    match = re.search(r'Current Capacity :\s*([\d.]+)%', line)
-                    if match:
-                        queue_info["current_capacity_percent"] = float(match.group(1))
-                elif 'Num Containers :' in line:
-                    match = re.search(r'Num Containers :\s*(\d+)', line)
-                    if match:
-                        queue_info["num_containers"] = int(match.group(1))
-                elif 'Used Memory :' in line:
-                    match = re.search(r'Used Memory :\s*(\d+)', line)
-                    if match:
-                        queue_info["used_memory_mb"] = int(match.group(1))
-                elif 'Used VCores :' in line:
-                    match = re.search(r'Used VCores :\s*(\d+)', line)
-                    if match:
-                        queue_info["used_vcores"] = int(match.group(1))
-                elif 'Reserved Memory :' in line:
-                    match = re.search(r'Reserved Memory :\s*(\d+)', line)
-                    if match:
-                        queue_info["reserved_memory_mb"] = int(match.group(1))
-                elif 'Reserved VCores :' in line:
-                    match = re.search(r'Reserved VCores :\s*(\d+)', line)
-                    if match:
-                        queue_info["reserved_vcores"] = int(match.group(1))
-                elif 'Max Memory :' in line:
-                    match = re.search(r'Max Memory :\s*(\d+)', line)
-                    if match:
-                        queue_info["max_memory_mb"] = int(match.group(1))
-                elif 'Max VCores :' in line:
-                    match = re.search(r'Max VCores :\s*(\d+)', line)
-                    if match:
-                        queue_info["max_vcores"] = int(match.group(1))
-                elif 'Min Memory :' in line:
-                    match = re.search(r'Min Memory :\s*(\d+)', line)
-                    if match:
-                        queue_info["min_memory_mb"] = int(match.group(1))
-                elif 'Min VCores :' in line:
-                    match = re.search(r'Min VCores :\s*(\d+)', line)
-                    if match:
-                        queue_info["min_vcores"] = int(match.group(1))
-                elif 'Pending Containers :' in line:
-                    match = re.search(r'Pending Containers :\s*(\d+)', line)
-                    if match:
-                        queue_info["pending_containers"] = int(match.group(1))
-                elif 'Running Containers :' in line:
-                    match = re.search(r'Running Containers :\s*(\d+)', line)
-                    if match:
-                        queue_info["running_containers"] = int(match.group(1))
-                        
-            return queue_info
+            return {"status": "success", "queue_resources": result}
             
         except Exception as e:
-            self.logger.error(f"解析队列状态失败: {str(e)}")
-            return {
-                "state": "",
-                "capacity_percent": 0,
-                "maximum_capacity_percent": 0,
-                "current_capacity_percent": 0,
-                "num_containers": 0,
-                "used_memory_mb": 0,
-                "used_vcores": 0,
-                "reserved_memory_mb": 0,
-                "reserved_vcores": 0,
-                "max_memory_mb": 0,
-                "max_vcores": 0,
-                "min_memory_mb": 0,
-                "min_vcores": 0,
-                "pending_containers": 0,
-                "running_containers": 0
+            error_msg = f"采集队列资源配置失败: {str(e)}"
+            self.logger.error(error_msg)
+            return {"status": "error", "message": error_msg}
+            
+    def _parse_fair_scheduler(self, scheduler_info: Dict) -> List[Dict]:
+        """
+        解析Fair Scheduler的队列数据
+        
+        Args:
+            scheduler_info: 调度器信息
+            
+        Returns:
+            List[Dict]: 队列列表
+        """
+        queues = []
+        
+        # Fair Scheduler通常只有一个rootQueue
+        root_queue = scheduler_info.get('rootQueue', {})
+        if root_queue:
+            # 为rootQueue添加队列名称
+            root_queue['queueName'] = 'root'
+            queues.append(root_queue)
+            
+            # 递归处理子队列（如果有的话）
+            child_queues = root_queue.get('childQueues', {})
+            if child_queues:
+                if isinstance(child_queues, dict) and 'queue' in child_queues:
+                    child_queue_list = child_queues['queue']
+                    if isinstance(child_queue_list, list):
+                        queues.extend(self._flatten_capacity_queues(child_queue_list))
+                    elif isinstance(child_queue_list, dict):
+                        queues.extend(self._flatten_capacity_queues([child_queue_list]))
+                        
+        return queues
+        
+    def _parse_capacity_scheduler(self, scheduler_info: Dict) -> List[Dict]:
+        """
+        解析Capacity Scheduler的队列数据
+        
+        Args:
+            scheduler_info: 调度器信息
+            
+        Returns:
+            List[Dict]: 队列列表
+        """
+        queues_data = scheduler_info.get('queues', {})
+        
+        # 处理不同的队列数据结构
+        root_queues = []
+        if isinstance(queues_data, dict) and 'queue' in queues_data:
+            root_queues = queues_data['queue']
+        elif isinstance(queues_data, list):
+            root_queues = queues_data
+        
+        # 确保root_queues是列表
+        if not isinstance(root_queues, list):
+            root_queues = [root_queues] if root_queues else []
+            
+        # 递归展开所有队列
+        return self._flatten_capacity_queues(root_queues)
+        
+    def _flatten_capacity_queues(self, queues: List[Dict]) -> List[Dict]:
+        """
+        递归展开Capacity Scheduler队列层级结构
+        
+        Args:
+            queues: 队列列表
+            
+        Returns:
+            List[Dict]: 展开后的队列列表
+        """
+        result = []
+        for queue in queues:
+            # 添加当前队列
+            result.append(queue)
+            
+            # 递归处理子队列
+            child_queues = queue.get('queues', {})
+            if isinstance(child_queues, dict) and 'queue' in child_queues:
+                child_queue_list = child_queues['queue']
+                if isinstance(child_queue_list, list):
+                    result.extend(self._flatten_capacity_queues(child_queue_list))
+                elif isinstance(child_queue_list, dict):
+                    result.extend(self._flatten_capacity_queues([child_queue_list]))
+                    
+        return result
+        
+    def _extract_queue_detail(self, queue: Dict, cluster_name: str, collect_time: datetime) -> Optional[Dict[str, Any]]:
+        """
+        提取队列详细信息（支持Fair Scheduler和Capacity Scheduler）
+        
+        Args:
+            queue: 队列数据
+            cluster_name: 集群名称
+            collect_time: 采集时间
+            
+        Returns:
+            Optional[Dict[str, Any]]: 队列详细信息，如果提取失败返回None
+        """
+        try:
+            # 基础信息
+            queue_name = queue.get("queueName", "")
+            state = queue.get("state", "RUNNING")  # Fair Scheduler默认状态
+            
+            # 资源信息
+            used_resources = queue.get("usedResources", {})
+            max_resources = queue.get("maxResources", {})
+            min_resources = queue.get("minResources", {})
+            reserved_resources = queue.get("reservedResources", {})
+            
+            # 容量信息（Capacity Scheduler专有，Fair Scheduler可能没有）
+            capacity_percent = float(queue.get("capacity", 0))
+            max_capacity_percent = float(queue.get("maximumCapacity", 0))
+            current_capacity_percent = float(queue.get("currentCapacity", 0))
+            
+            # 如果是Fair Scheduler的root队列，尝试计算资源利用率作为容量
+            if queue_name == "root" and capacity_percent == 0:
+                max_memory = max_resources.get("memory", 0)
+                used_memory = used_resources.get("memory", 0)
+                if max_memory > 0:
+                    current_capacity_percent = round((used_memory / max_memory) * 100, 2)
+            
+            queue_detail = {
+                "queue_name": queue_name,
+                "state": state,
+                "capacity_percent": capacity_percent,
+                "maximum_capacity_percent": max_capacity_percent,
+                "current_capacity_percent": current_capacity_percent,
+                "num_containers": int(queue.get("numContainers", 0)),
+                "used_memory_mb": int(used_resources.get("memory", 0)),
+                "used_vcores": int(used_resources.get("vCores", 0)),
+                "reserved_memory_mb": int(reserved_resources.get("memory", 0)),
+                "reserved_vcores": int(reserved_resources.get("vCores", 0)),
+                "max_memory_mb": int(max_resources.get("memory", 0)),
+                "max_vcores": int(max_resources.get("vCores", 0)),
+                "min_memory_mb": int(min_resources.get("memory", 0)),
+                "min_vcores": int(min_resources.get("vCores", 0)),
+                "pending_containers": int(queue.get("pendingContainers", 0)),
+                "running_containers": int(queue.get("runningContainers", 0)),
+                "cluster_name": cluster_name,
+                "collect_time": collect_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "insert_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
+            
+            return queue_detail
+            
+        except Exception as e:
+            queue_name = queue.get("queueName", "Unknown")
+            self.logger.error(f"提取队列 {queue_name} 详细信息失败: {str(e)}")
+            return None
             
     def _save_to_mysql(self, table_name: str, data: Dict[str, Any]) -> None:
         """
@@ -366,7 +321,6 @@ class YARNQueueCollector(ScriptTemplate):
             """
             
             self.mysql_client.execute_update(sql, values)
-            self.logger.debug(f"数据已保存到表 {table_name}")
             
         except Exception as e:
             self.logger.error(f"保存数据到MySQL失败: {str(e)}")
