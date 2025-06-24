@@ -6,3 +6,6 @@ requests>=2.31.0  # 用于HTTP请求（Ambari、YARN、HTTP客户端）
 
 # 数据库相关
 pymysql==1.1.0  # 用于MySQL数据库连接
+
+# 安全相关
+cryptography>=41.0.0  # 用于密码加密和解密

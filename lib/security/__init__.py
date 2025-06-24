@@ -1,0 +1,2 @@
+# Security utilities for AutoEVS
+__version__ = "1.0.0" 
