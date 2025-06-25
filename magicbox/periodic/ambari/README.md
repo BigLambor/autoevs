@@ -1,5 +1,192 @@
 # Ambari 集群清单采集脚本
 
+## 功能概述
+
+该脚本用于采集 Ambari 管理的集群完整清单信息，包括：
+- 集群基本信息
+- 服务和组件信息
+- 主机详细信息
+- 角色分类和映射关系
+
+## 🆕 新功能：智能组件分类
+
+### 自动学习功能
+脚本现在支持从 Ambari API 自动学习组件角色分类，**无需手动配置**！
+
+**工作原理：**
+1. **从 Ambari 获取元数据**：读取服务组件的 `category` 和 `cardinality` 信息
+2. **智能分类算法**：
+   - `category=MASTER` → MASTER 角色
+   - `category=SLAVE` → WORKER 角色  
+   - `category=CLIENT` → CLIENT 角色
+   - `cardinality=1,1-2,2` → 通常是 MASTER
+   - `cardinality=1+,0+` → 通常是 WORKER
+   - `cardinality=ALL` → 通常是 CLIENT
+3. **关键词后备匹配**：基于组件名称进行智能推断
+4. **配置文件优先**：手动配置的规则优先级更高
+
+### 支持的分类方式
+
+1. **完全自动** (推荐)
+   ```bash
+   python collect_ambari_inventory.py
+   ```
+   - 从 Ambari 自动学习所有组件分类
+   - 与配置文件规则智能合并
+
+2. **仅使用配置文件**
+   ```bash
+   python collect_ambari_inventory.py --disable-auto-learn
+   ```
+   - 禁用自动学习，仅使用 `config/ambari_service_rules.yaml`
+
+3. **保存学习结果**
+   ```bash
+   python collect_ambari_inventory.py --save-learned-rules
+   ```
+   - 将学习到的规则保存到 `config/learned_ambari_rules_<集群名>.yaml`
+   - 方便查看和后续手动配置
+
+## 使用方法
+
+### 基本使用
+```bash
+# 自动学习模式（推荐）
+python collect_ambari_inventory.py --env prod
+
+# 禁用自动学习
+python collect_ambari_inventory.py --env prod --disable-auto-learn
+
+# 保存学习规则到文件
+python collect_ambari_inventory.py --env prod --save-learned-rules
+```
+
+### 命令行参数
+- `--env`: 指定环境 (dev/test/prod)
+- `--disable-auto-learn`: 禁用自动学习功能
+- `--save-learned-rules`: 保存学习到的规则到文件
+
+## 配置文件
+
+### 主配置文件：`config/{env}/ambari_service_rules.yaml`
+```yaml
+service_component_rules:
+  HDFS:
+    master_components: ['NAMENODE', 'SECONDARY_NAMENODE', 'JOURNALNODE']
+    worker_components: ['DATANODE']
+    client_components: ['HDFS_CLIENT']
+  # ... 更多服务配置
+
+default_rules:
+  master_keywords: ['MASTER', 'SERVER', 'MANAGER', 'COORDINATOR']
+  worker_keywords: ['WORKER', 'NODE', 'EXECUTOR', 'DATANODE']
+  client_keywords: ['CLIENT', 'GATEWAY']
+```
+
+### 自动生成的学习文件：`config/{env}/learned_ambari_rules_<集群名>.yaml`
+```yaml
+metadata:
+  cluster_name: "my_cluster"
+  generated_time: "2025-06-25 08:00:00"
+  total_services: 8
+  total_components: 25
+
+service_component_rules:
+  FLINK:
+    master_components: ['FLINK_JOBMANAGER']
+    worker_components: ['FLINK_TASKMANAGER']
+    client_components: ['FLINK_CLIENT']
+  # ... 自动学习的规则
+
+component_metadata:
+  FLINK.FLINK_JOBMANAGER:
+    category: "MASTER"
+    cardinality: "1"
+    service_name: "FLINK"
+  # ... 详细的组件元数据
+```
+
+## 数据存储
+
+### 数据库表结构
+
+#### ambari_cluster_inventory (集群清单表)
+- 扁平化存储所有集群、服务、组件、主机信息
+- 包含智能分类的角色信息 (`is_master`, `is_worker`, `role_category`)
+
+#### ambari_cluster_stats (集群统计表)  
+- 集群级别的统计信息
+- 服务、主机、组件的数量和状态统计
+
+## 智能分类示例
+
+### 自动识别的服务组件
+
+| 服务 | 组件 | Ambari元数据 | 自动分类 |
+|-----|------|-------------|----------|
+| HDFS | NAMENODE | category=MASTER, cardinality=1-2 | MASTER |
+| HDFS | DATANODE | category=SLAVE, cardinality=1+ | WORKER |
+| HDFS | HDFS_CLIENT | category=CLIENT, cardinality=ALL | CLIENT |
+| Flink | FLINK_JOBMANAGER | category="", cardinality=1 | MASTER (基于名称) |
+| Flink | FLINK_TASKMANAGER | category="", cardinality=1+ | WORKER (基于名称) |
+| Kafka | KAFKA_BROKER | category=MASTER, cardinality=1+ | MASTER |
+
+### 扩展新服务
+
+当集群中部署了新服务（如 Pulsar、Presto 等），脚本会：
+
+1. **自动发现**：从 Ambari API 获取新服务的组件信息
+2. **智能分类**：基于元数据和名称自动分类
+3. **动态合并**：将新规则与现有配置合并
+4. **日志记录**：记录新发现的服务和组件
+
+## 故障排除
+
+### 常见问题
+
+1. **Ambari 连接失败**
+   - 检查 `config/<env>/ambari.yaml` 配置
+   - 确认网络连接和认证信息
+
+2. **MySQL 连接失败**  
+   - 脚本会继续运行但不保存数据
+   - 检查 `config/<env>/mysql.yaml` 配置
+
+3. **组件分类不准确**
+   - 使用 `--save-learned-rules` 查看学习结果
+   - 在 `config/{env}/ambari_service_rules.yaml` 中手动调整
+   - 手动配置的规则优先级更高
+
+### 调试技巧
+
+```bash
+# 查看详细日志
+tail -f logs/<env>/AmbariInventoryCollector.log
+
+# 保存学习规则进行分析
+python collect_ambari_inventory.py --save-learned-rules
+
+# 禁用自动学习测试配置文件
+python collect_ambari_inventory.py --disable-auto-learn
+```
+
+## 最佳实践
+
+1. **首次运行**：使用 `--save-learned-rules` 查看自动学习结果
+2. **生产环境**：验证分类准确性后再启用自动学习
+3. **新服务部署**：重新运行脚本自动发现新组件
+4. **定期检查**：定期查看日志中的"未配置服务组件"信息
+5. **手动优化**：将常用的准确规则添加到配置文件中
+
+## 技术优势
+
+- ✅ **零配置启动**：无需手动配置即可运行
+- ✅ **智能适应**：自动适应新服务和组件
+- ✅ **向后兼容**：完全兼容现有配置文件
+- ✅ **灵活控制**：支持启用/禁用自动学习
+- ✅ **可视化结果**：可保存学习规则供分析
+- ✅ **高准确性**：基于 Ambari 官方元数据分类
+
 ## 概述
 
 本目录包含 Ambari 集群清单采集的相关脚本，用于采集 Ambari 管理的 Hadoop 集群中的所有服务、组件、主机信息，并存储到扁平化的数据库表中。
@@ -141,33 +328,6 @@ database: "your_database"
 
 ### Client 组件
 - 其他所有组件
-
-## 故障排除
-
-### 常见问题
-
-1. **连接失败**
-   - 检查 Ambari 服务器地址和端口
-   - 验证用户名密码
-   - 确认网络连通性
-
-2. **数据采集不完整**
-   - 检查 Ambari API 权限
-   - 查看日志中的警告信息
-   - 验证集群服务状态
-
-3. **数据库写入失败**
-   - 检查 MySQL 连接配置
-   - 确认数据库表已创建
-   - 验证数据库权限
-
-### 日志查看
-
-脚本运行时会输出详细的日志信息，包括：
-- 连接状态
-- 数据采集进度
-- 错误和警告信息
-- 统计结果
 
 ## 定时任务
 

@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS ambari_cluster_inventory (
     is_worker BOOLEAN DEFAULT FALSE COMMENT '是否为Worker角色',
     role_category VARCHAR(50) DEFAULT NULL COMMENT '角色类别',
     
+    -- 服务特定信息
+    service_port INT DEFAULT NULL COMMENT '服务端口',
+    service_config_version VARCHAR(50) DEFAULT NULL COMMENT '服务配置版本',
+    service_tags TEXT DEFAULT NULL COMMENT '服务标签(JSON格式)',
+    
     -- 索引设计
     INDEX idx_cluster_name (cluster_name) COMMENT '集群名称索引',
     INDEX idx_collect_time (collect_time) COMMENT '采集时间索引',

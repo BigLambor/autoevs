@@ -1,0 +1,156 @@
+# Ambari 服务组件角色分类规则配置
+# 支持动态添加新服务而无需修改代码
+
+service_component_rules:
+  # HDFS 服务
+  HDFS:
+    master_components:
+      - NAMENODE
+      - SECONDARY_NAMENODE  
+      - JOURNALNODE
+    worker_components:
+      - DATANODE
+    client_components:
+      - HDFS_CLIENT
+
+  # YARN 服务
+  YARN:
+    master_components:
+      - RESOURCEMANAGER
+      - APP_TIMELINE_SERVER
+    worker_components:
+      - NODEMANAGER
+    client_components:
+      - YARN_CLIENT
+
+  # Hive 服务
+  HIVE:
+    master_components:
+      - HIVE_METASTORE
+      - HIVE_SERVER
+      - HIVE_SERVER_INTERACTIVE
+    worker_components: []
+    client_components:
+      - HIVE_CLIENT
+
+  # HBase 服务
+  HBASE:
+    master_components:
+      - HBASE_MASTER
+    worker_components:
+      - HBASE_REGIONSERVER
+    client_components:
+      - HBASE_CLIENT
+
+  # Spark 服务
+  SPARK:
+    master_components:
+      - SPARK_JOBHISTORYSERVER
+      - LIVY_SERVER
+    worker_components: []
+    client_components:
+      - SPARK_CLIENT
+
+  # Flink 服务 (通过Ambari管理)
+  FLINK:
+    master_components:
+      - FLINK_JOBMANAGER
+      - FLINK_HISTORYSERVER
+    worker_components:
+      - FLINK_TASKMANAGER
+    client_components:
+      - FLINK_CLIENT
+      
+  # Pulsar 服务
+  PULSAR:
+    master_components:
+      - PULSAR_BROKER
+      - PULSAR_BOOKKEEPER
+      - PULSAR_ZOOKEEPER
+    worker_components: []
+    client_components:
+      - PULSAR_CLIENT
+      
+  # Presto/Trino 服务
+  PRESTO:
+    master_components:
+      - PRESTO_COORDINATOR
+    worker_components:
+      - PRESTO_WORKER
+    client_components:
+      - PRESTO_CLIENT
+
+  # Kafka 服务
+  KAFKA:
+    master_components:
+      - KAFKA_BROKER
+    worker_components: []
+    client_components:
+      - KAFKA_CLIENT
+
+  # Zookeeper 服务
+  ZOOKEEPER:
+    master_components:
+      - ZOOKEEPER_SERVER
+    worker_components: []
+    client_components:
+      - ZOOKEEPER_CLIENT
+
+  # Storm 服务
+  STORM:
+    master_components:
+      - NIMBUS
+      - STORM_UI_SERVER
+    worker_components:
+      - SUPERVISOR
+    client_components:
+      - STORM_CLIENT
+
+  # Ambari Metrics
+  AMBARI_METRICS:
+    master_components:
+      - METRICS_COLLECTOR
+    worker_components:
+      - METRICS_MONITOR
+    client_components: []
+
+  # Elasticsearch (如果通过Ambari管理)
+  ELASTICSEARCH:
+    master_components:
+      - ELASTICSEARCH_MASTER
+    worker_components:
+      - ELASTICSEARCH_DATA
+    client_components:
+      - ELASTICSEARCH_CLIENT
+
+  # ClickHouse (如果通过Ambari管理)
+  CLICKHOUSE:
+    master_components:
+      - CLICKHOUSE_SERVER
+    worker_components: []
+    client_components:
+      - CLICKHOUSE_CLIENT
+
+# 默认分类规则（当服务不在上述列表中时）
+default_rules:
+  # 包含这些关键词的组件被认为是Master
+  master_keywords:
+    - MASTER
+    - SERVER
+    - MANAGER
+    - COORDINATOR
+    - NAMENODE
+    - METASTORE
+    
+  # 包含这些关键词的组件被认为是Worker  
+  worker_keywords:
+    - WORKER
+    - NODE
+    - EXECUTOR
+    - DATANODE
+    - REGIONSERVER
+    
+  # 包含这些关键词的组件被认为是Client
+  client_keywords:
+    - CLIENT
+    - GATEWAY 

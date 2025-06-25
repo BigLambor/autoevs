@@ -1,4 +1,4 @@
 # -*- coding: utf-8 -*-
 """
-HDFS 定期任务模块
+Ambari 定期任务模块
 """ 
